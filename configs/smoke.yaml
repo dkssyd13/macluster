@@ -1,0 +1,17 @@
+# Fast synthetic-CIFAR sanity sweep: exercises the full sweep harness + driver
+# end to end (no download, tiny model run) and produces >=2 results.
+name: smoke
+
+base:
+  task: cifar10
+  model: resnet20
+  synthetic: true
+  world_size: 2
+  rounds: 2
+  batch_size: 32
+  H: 20
+  eval_every: 1
+  seed: 0
+
+grid:
+  algorithm: [dense, diloco]

@@ -1,0 +1,32 @@
+[project]
+name = "macluster"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "dkssyd13", email = "vladkim2002@cau.ac.kr" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "grove-ml>=0.1.0",
+    "matplotlib>=3.10.9",
+    "mlx>=0.31.2",
+    "numpy>=2.4.6",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+    "tiktoken>=0.13.0",
+]
+
+# grove-ml is the centerpiece tool but is only imported by the (deferred)
+# GroveBackend for real 2-MacBook runs; the SimCluster core never imports it,
+# so axes 1-3 work even if grove is unavailable.
+
+[project.scripts]
+macluster = "macluster.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"

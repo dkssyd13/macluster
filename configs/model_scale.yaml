@@ -1,0 +1,22 @@
+# Compute-load axis (proposal's "model 계산량에 따른 분산 이득 변화"): same
+# algorithm/link, two model sizes. ResNet-56 (~856K params) costs ~3x the compute
+# of ResNet-20 (~272K) but the same *communication per sync*, so its comm/compute
+# ratio drops -- i.e. distribution/low-communication is relatively cheaper on the
+# heavier model. Compare compute_s and total comm across the two.
+name: model_scale
+
+base:
+  task: cifar10
+  algorithm: diloco
+  synthetic: false
+  world_size: 2
+  max_steps: 500
+  batch_size: 128
+  H: 20
+  link: wifi
+  inner_opt: adam
+  eval_every: 5
+  seed: 0
+
+grid:
+  model: [resnet20, resnet56]

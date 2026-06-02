@@ -1,0 +1,24 @@
+# Axis 3 (adaptive sync policy): the link degrades mid-run (Wi-Fi -> AWDL at the
+# 300-step mark). SparseLoCo uses a fixed sync cadence; the adaptive policy reacts
+# to the observed link, so this sweep isolates the benefit of adaptivity. In
+# budget mode the switch is keyed by step, so it lands at the same compute point
+# for both runs even though adaptive varies H.
+name: axis3_adaptive
+
+base:
+  task: cifar10
+  model: resnet20
+  synthetic: false
+  world_size: 2
+  max_steps: 600        # equal compute budget; adaptive varies H so rounds differ
+  batch_size: 128
+  H: 20
+  link: wifi
+  link_switch_to: awdl
+  link_switch_at: 300   # steps (budget mode), = halfway
+  inner_opt: adam
+  eval_every: 5
+  seed: 0
+
+grid:
+  algorithm: [sparseloco, adaptive]

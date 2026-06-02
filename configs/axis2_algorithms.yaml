@@ -1,0 +1,19 @@
+# Axis 2 (synchronization algorithm): real CIFAR-10 / ResNet-20, fixed link,
+# comparing dense all-reduce vs DiLoCo vs SparseLoCo low-communication training.
+name: axis2_algorithms
+
+base:
+  task: cifar10
+  model: resnet20
+  synthetic: false
+  world_size: 2
+  max_steps: 500        # equal total-local-step budget: fair dense(H=1) vs low-comm(H=20)
+  batch_size: 128
+  H: 20
+  link: wifi
+  inner_opt: adam
+  eval_every: 5
+  seed: 0
+
+grid:
+  algorithm: [dense, diloco, sparseloco]

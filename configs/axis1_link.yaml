@@ -1,0 +1,19 @@
+# Axis 1 (network link): real CIFAR-10 / ResNet-20, sweeping the low-communication
+# algorithms across link profiles (Wi-Fi infra, AWDL peer-to-peer, degraded Wi-Fi).
+name: axis1_link
+
+base:
+  task: cifar10
+  model: resnet20
+  synthetic: false
+  world_size: 2
+  max_steps: 500        # equal compute budget across links
+  batch_size: 128
+  H: 20
+  inner_opt: adam
+  eval_every: 5
+  seed: 0
+
+grid:
+  algorithm: [diloco, sparseloco]
+  link: [wifi, awdl, wifi_degraded]
