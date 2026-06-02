@@ -19,6 +19,7 @@ uv run macluster sweep --config configs/axis2_algorithms.yaml          # grid sw
 uv run macluster plot --runs runs/axis2_algorithms/*/ --out figures/axis2 --sweep runs/axis2_algorithms/index.json
 
 uv run macluster train --backend grove --world-size 1 --synthetic --rounds 2   # GroveBackend W=1 smoke
+./scripts/grove_run.sh start|join configs/grove/<algo>.env   # real 2-Mac run, same config on both (see docs/PHASE7_TODO.md)
 ```
 
 ## Architecture
@@ -32,7 +33,7 @@ The round loop lives in `train.py:run_training`:
 4. `emulation/link.py` charges `sync_s` for those bytes on the active `LinkProfile`;
 5. `algorithm.observe(compute_s, sync_s, link)` lets adaptive policies react.
 
-On `--backend grove` the same loop branches: each rank runs one model (barrier-fenced inner loop → real `compute_s`), `algorithm.sync_collective(local_params, cluster)` aggregates over `grove.all_sum`, and `sync_s`/`comm_bytes` are **measured** (perf_counter around the collective) rather than charged by `link.py`. `observe` then receives the real timings — the point of Phase 7. Logged field names are unchanged so `plot.py` works on both backends.
+On `--backend grove` the loop branches to measure real timings; the algorithm aggregates this rank's tree via `sync_collective` over `grove.all_sum` instead of `sync` over the replica list.
 
 **Key decision:** algorithms (`algorithms/*.py`) implement DiLoCo/SparseLoCo as a synchronous-averaging view over the replica list — we own the outer loop rather than calling grove's high-level `grove.diloco()`. This is what lets the **adaptive policy (`adaptive.py`, the novel contribution)** retune `H` and `k_frac` every round. All algorithms satisfy the `Algorithm` contract in `algorithms/base.py` (`init_global` / `global_params` / `local_steps` / `sync` for the sim list-of-replicas path / `sync_collective` for the grove single-rank-over-collectives path / `observe`).
 
