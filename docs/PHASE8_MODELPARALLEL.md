@@ -130,11 +130,16 @@ uv run macluster train --task shakespeare --synthetic --parallelism pipeline \
 uv run macluster train --task wikitext --parallelism pipeline --model gpt2 \
     --world-size 2 --stage-mem-gb 48,24 --rounds 50
 
-# Real 2-Mac run (one stage per Mac), same config file on both:
-./scripts/grove_run.sh start configs/grove/pipeline.env   # mac-A (48GB)
-./scripts/grove_run.sh join  configs/grove/pipeline.env   # mac-B (24GB)
+# Real 2-Mac run -- turnkey. The 48GB Mac MUST be the launcher (rank0 = the bigger
+# stage); start it first, then the 24GB Mac within ~2 min:
+./scripts/run_mac_48gb.sh    # on the 48GB Mac (rank0 = stage0)
+./scripts/run_mac_24gb.sh    # on the 24GB Mac (rank1 = stage1)
 ```
-For the large-model headline set `MACLUSTER_MODEL=gpt3b` and
-`MACLUSTER_STAGE_MEM_GB=48,24` in `pipeline.env` (the auto cut puts ~2/3 of the
-blocks on mac-A). `gpt3b`'s fp32 Adam state (~44GB) exceeds a single 48GB node,
-so only the split can train it — the point data parallelism cannot make.
+The two scripts run three phases in order — `smoke` (synthetic connectivity),
+`xl` (gpt_xl ~1.6B, fits both), `3b` (gpt3b ~2.78B, the headline) — each a full
+2-Mac run, so even if `3b` OOMs you still have the `smoke`+`xl` results. Run a
+subset with the same arg on both Macs, e.g. `./scripts/run_mac_48gb.sh xl`. The
+memory-aware cut `[48,24]` puts ~2/3 of the blocks (stage0) on the 48GB Mac;
+`gpt3b`'s fp32 Adam state (~44GB) exceeds a single 48GB node, so only the split
+can train it — the point data parallelism cannot make. Configs live in
+`configs/grove/pipeline_{smoke,xl,3b}.env` (same bytes sourced on both Macs).
