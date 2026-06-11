@@ -56,12 +56,19 @@ def _cfg_from_env() -> TrainConfig:
     def _opt_float(name, fallback):
         return float(os.environ[name]) if name in os.environ else fallback
 
+    def _opt_str(name, fallback):
+        return os.environ[name] if name in os.environ else fallback
+
     return TrainConfig(
         task=g("MACLUSTER_TASK", d.task),
         model=g("MACLUSTER_MODEL", d.model),
         algorithm=g("MACLUSTER_ALGORITHM", d.algorithm),
-        world_size=int(grove.world_size),  # one shard per rank; ignore env
+        world_size=int(grove.world_size),  # one shard/stage per rank; ignore env
         backend="grove",
+        parallelism=g("MACLUSTER_PARALLELISM", d.parallelism),
+        cut=_opt_str("MACLUSTER_CUT", d.cut),
+        n_micro=int(g("MACLUSTER_N_MICRO", str(d.n_micro))),
+        stage_mem_gb=_opt_str("MACLUSTER_STAGE_MEM_GB", d.stage_mem_gb),
         rounds=int(g("MACLUSTER_ROUNDS", str(d.rounds))),
         max_steps=_opt_int("MACLUSTER_MAX_STEPS", d.max_steps),
         batch_size=int(g("MACLUSTER_BATCH_SIZE", str(d.batch_size))),

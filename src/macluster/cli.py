@@ -18,6 +18,14 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--world-size", type=int, default=2, dest="world_size")
     p.add_argument("--backend", default="sim", choices=["sim", "grove"],
                    help="sim = single-machine emulation; grove = real 2-MacBook cluster")
+    p.add_argument("--parallelism", default="data", choices=["data", "pipeline"],
+                   help="data = DiLoCo/etc. replicas; pipeline = model-parallel GPT split (Phase 8)")
+    p.add_argument("--cut", default=None,
+                   help="pipeline: explicit block-cut indices, e.g. '22' or '8,16' (else auto from --stage-mem-gb)")
+    p.add_argument("--n-micro", type=int, default=4, dest="n_micro",
+                   help="pipeline: micro-batches per optimizer step (1F1B)")
+    p.add_argument("--stage-mem-gb", default=None, dest="stage_mem_gb",
+                   help="pipeline: per-stage RAM budget for the memory-aware auto cut, e.g. '48,24'")
     p.add_argument("--rounds", type=int, default=50)
     p.add_argument("--max-steps", type=int, default=None, dest="max_steps",
                    help="equal total-local-step budget across algorithms (overrides rounds)")

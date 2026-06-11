@@ -24,6 +24,7 @@ from .backends.sim import SimCluster
 from .data.cifar import make_cifar_task
 from .emulation.link import LinkSchedule, allreduce_bytes, get_profile
 from .metrics.logger import RunLogger
+from .models.gpt import GPT_CONFIGS, gpt_param_count, memory_aware_cut, stage_param_counts
 from .task import Task
 
 
@@ -34,6 +35,10 @@ class TrainConfig:
     algorithm: str = "diloco"            # dense | diloco | sparseloco | adaptive
     world_size: int = 2
     backend: str = "sim"                 # sim (single-machine emulation) | grove (real 2-Mac)
+    parallelism: str = "data"            # data (DiLoCo/etc.) | pipeline (model-parallel, GPT-only)
+    cut: str | None = None               # pipeline: explicit block-cut indices, e.g. "22" or "8,16"
+    n_micro: int = 4                     # pipeline: micro-batches per optimizer step (1F1B)
+    stage_mem_gb: str | None = None      # pipeline: per-stage RAM budget for the auto cut, e.g. "48,24"
     rounds: int = 50
     max_steps: int | None = None         # if set, run to an equal TOTAL-local-step
     #                                      budget across algorithms (fair dense-vs-
@@ -56,7 +61,10 @@ class TrainConfig:
 
     def slug(self) -> str:
         link = self.link if not self.link_switch_to else f"{self.link}2{self.link_switch_to}"
-        base = f"{self.task}-{self.model}-{self.algorithm}-w{self.world_size}-H{self.H}-{link}-s{self.seed}"
+        if self.parallelism == "pipeline":
+            base = f"{self.task}-{self.model}-pipeline-w{self.world_size}-m{self.n_micro}-{link}-s{self.seed}"
+        else:
+            base = f"{self.task}-{self.model}-{self.algorithm}-w{self.world_size}-H{self.H}-{link}-s{self.seed}"
         return base if self.backend == "sim" else f"{base}-{self.backend}"
 
 
@@ -131,6 +139,10 @@ def build_cluster(cfg: TrainConfig, task: Task):
 # driver
 # --------------------------------------------------------------------------- #
 def run_training(cfg: TrainConfig, run_dir: str) -> dict:
+    if cfg.parallelism == "pipeline":
+        return run_pipeline_training(cfg, run_dir)
+    if cfg.parallelism != "data":
+        raise KeyError(f"unknown parallelism {cfg.parallelism!r} (data | pipeline)")
     task = build_task(cfg)
     cluster = build_cluster(cfg, task)
     algo = build_algorithm(cfg)
@@ -266,6 +278,209 @@ def run_training(cfg: TrainConfig, run_dir: str) -> dict:
             "sim_time_s": round(sim_time, 3),
             "time_to_target_s": None if tta is None else round(tta, 3),
             "target_metric": target,
+        }
+    )
+    logger.close()
+    return summary
+
+
+# --------------------------------------------------------------------------- #
+# pipeline (model) parallelism — Phase 8 (see docs/PHASE8_MODELPARALLEL.md)
+# --------------------------------------------------------------------------- #
+def build_pipeline_task(cfg: TrainConfig) -> Task:
+    """A GPT (text) task with a SINGLE data shard: pipeline parallelism splits one
+    model across stages, so the data is NOT sharded (that is the orthogonal
+    data-parallel axis). Every rank builds this identically (same seed) so the
+    first stage's tokens and the last stage's targets stay aligned per micro-batch."""
+    if cfg.task not in ("shakespeare", "wikitext"):
+        raise KeyError(
+            f"pipeline parallelism is GPT-only; --task must be shakespeare|wikitext, got {cfg.task!r}"
+        )
+    from .data.text import make_text_task  # lazy: keeps cifar-only runs light
+
+    return make_text_task(
+        1,
+        variant=cfg.task,
+        batch_size=cfg.batch_size,
+        seq_len=cfg.seq_len,
+        synthetic=cfg.synthetic,
+        data_dir=cfg.data_dir,
+        seed=cfg.seed,
+    )
+
+
+def _parse_stage_mem(spec: str | None, world_size: int) -> list[float]:
+    if spec:
+        mem = [float(x) for x in str(spec).split(",") if x.strip() != ""]
+        if len(mem) != world_size:
+            raise ValueError(
+                f"--stage-mem-gb has {len(mem)} entr(ies) but world_size is {world_size}"
+            )
+        return mem
+    return [1.0] * world_size  # equal budgets -> balanced split
+
+
+def resolve_cuts(cfg: TrainConfig, gpt_cfg) -> list[int]:
+    """Block-cut indices for the split: explicit ``--cut`` if given, else a
+    memory-aware partition sized by ``--stage-mem-gb`` (Asteroid-style)."""
+    if cfg.cut:
+        cuts = [int(c) for c in str(cfg.cut).split(",") if c.strip() != ""]
+    else:
+        cuts = memory_aware_cut(gpt_cfg, _parse_stage_mem(cfg.stage_mem_gb, cfg.world_size))
+    if len(cuts) + 1 != cfg.world_size:
+        raise ValueError(
+            f"cut {cuts} yields {len(cuts) + 1} stage(s) but world_size is {cfg.world_size}; "
+            f"need exactly one stage per rank"
+        )
+    return cuts
+
+
+def build_pipeline_cluster(cfg: TrainConfig, gpt_cfg, cuts: list[int], task: Task):
+    """SimPipelineCluster (all stages, one process) or PipelineCluster (grove,
+    one stage per Mac). The seam loss is logits-level (``loss(logits, y)``),
+    distinct from the task's ``loss(model, X, y)``."""
+    from .backends.pipeline import SimPipelineCluster, seq_cross_entropy
+
+    data_iter = task.train_shards[0]
+    if cfg.backend == "grove":
+        from .backends.pipeline_grove import PipelineCluster  # lazy: keep grove off the sim path
+
+        return PipelineCluster(
+            gpt_cfg, cuts, build_inner_opt(cfg), data_iter, seq_cross_entropy,
+            batch_size=cfg.batch_size, seq_len=cfg.seq_len,
+        )
+    if cfg.backend != "sim":
+        raise KeyError(f"unknown backend {cfg.backend!r}")
+    return SimPipelineCluster(gpt_cfg, cuts, build_inner_opt(cfg), data_iter, seq_cross_entropy)
+
+
+def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
+    """Model-parallel (pipeline) training driver — the sibling of
+    :func:`run_training`'s data-parallel loop. A round = ONE optimizer step over
+    ``n_micro`` micro-batches (1F1B). Logs the same field names as the DP loop so
+    ``plot.py`` and the sweep harness work unchanged.
+
+    sim   : compute time is measured per step; the seam transfer is charged
+            analytically on the active LinkProfile (mirrors the DP sim path).
+    grove : the whole step is timed around real ``send``/``recv`` (communication
+            overlaps compute), and the seam bytes are measured, not charged.
+    """
+    task = build_pipeline_task(cfg)
+    if cfg.model not in GPT_CONFIGS:
+        raise KeyError(f"pipeline --model must be one of {sorted(GPT_CONFIGS)}, got {cfg.model!r}")
+    vocab = int(task.meta["vocab_size"])
+    gpt_cfg = GPT_CONFIGS[cfg.model](vocab)
+    if cfg.seq_len > gpt_cfg.block_size:
+        raise ValueError(f"--seq-len {cfg.seq_len} exceeds {cfg.model} block_size {gpt_cfg.block_size}")
+    cuts = resolve_cuts(cfg, gpt_cfg)
+    cluster = build_pipeline_cluster(cfg, gpt_cfg, cuts, task)
+    link = build_link(cfg)
+    rng = np.random.default_rng(cfg.seed)
+
+    is_grove = cfg.backend == "grove"
+    # On grove the metric-bearing rank is the LAST one (it owns the loss + the
+    # logits for eval); on sim a single process holds everything.
+    is_metric_rank = (not is_grove) or (cluster.rank == cluster.world_size - 1)
+
+    n_stages = len(cuts) + 1
+    part = stage_param_counts(gpt_cfg, cuts)
+    knobs = {
+        "parallelism": "pipeline",
+        "n_micro": cfg.n_micro,
+        "n_stages": n_stages,
+        "cut": ",".join(map(str, cuts)),
+    }
+    logger = RunLogger(run_dir, asdict(cfg))
+
+    sim_time = 0.0
+    total_bytes = 0.0
+    samples = 0
+
+    budget = cfg.max_steps  # interpreted as a number of optimizer steps for pipeline
+    eval_step_interval = max(1, budget // 20) if budget is not None else None
+    next_eval_at = eval_step_interval
+
+    rnd = 0
+    steps_done = 0
+    while (steps_done < budget) if budget is not None else (rnd < cfg.rounds):
+        if is_grove:
+            cluster.barrier()
+            t0 = time.perf_counter()
+            loss, comm_bytes = cluster.step(cfg.n_micro)
+            cluster.barrier()
+            compute_s = time.perf_counter() - t0
+            sync_s = 0.0  # communication overlaps compute; folded into the measured step
+            link_name = cfg.link
+            real_timing = {"round_s_real": round(compute_s, 5)}
+        else:
+            t0 = time.perf_counter()
+            loss, comm_bytes = cluster.step(cfg.n_micro)
+            compute_s = time.perf_counter() - t0
+            profile = link.at(steps_done if budget is not None else rnd)
+            sync_s = profile.transfer_time(comm_bytes, rng)  # point-to-point seam (no all-reduce factor)
+            link_name = profile.name
+            real_timing = {}
+
+        steps_done += 1
+        samples += cfg.n_micro * cfg.batch_size
+        sim_time += compute_s + sync_s
+        total_bytes += comm_bytes
+
+        if budget is not None:
+            is_last = steps_done >= budget
+            do_eval = is_last or steps_done >= next_eval_at
+            if steps_done >= next_eval_at:
+                next_eval_at += eval_step_interval
+        else:
+            is_last = rnd == cfg.rounds - 1
+            do_eval = is_last or rnd % cfg.eval_every == 0
+
+        rec = {
+            "round": rnd,
+            "step": steps_done,
+            "train_loss": None if loss is None else float(loss),
+            "compute_s": round(compute_s, 5),
+            "sync_s_sim": round(sync_s, 5),
+            "round_s_sim": round(compute_s + sync_s, 5),
+            "sim_time_s": round(sim_time, 5),
+            "comm_bytes": int(comm_bytes),
+            "comm_bytes_cum": int(total_bytes),
+            "link": link_name,
+            "samples": samples,
+            "throughput_sps": round(cfg.n_micro * cfg.batch_size / max(compute_s, 1e-6), 1),
+            **real_timing,
+            **knobs,
+        }
+
+        if do_eval:
+            if is_grove:
+                cluster.barrier()
+                metrics = cluster.eval_loss(task.eval_batches)  # None except the last rank
+                cluster.barrier()
+                if metrics:
+                    rec.update(metrics)
+            else:
+                metrics = task.eval_fn(cluster.eval_model(), task.eval_batches)
+                rec.update(metrics)
+
+        logger.log(rec)
+        rnd += 1
+
+    final = logger.records[-1]
+    summary = logger.summary(
+        {
+            "config": asdict(cfg),
+            "parallelism": "pipeline",
+            "n_stages": n_stages,
+            "cut": cuts,
+            "stage_param_counts": part,
+            "model_param_count": gpt_param_count(gpt_cfg),
+            "final_train_loss": final.get("train_loss"),
+            f"final_{task.metric}": final.get(task.metric),
+            "total_comm_bytes": int(total_bytes),
+            "total_comm_MB": round(total_bytes / 1e6, 3),
+            "sim_time_s": round(sim_time, 3),
+            "target_metric": None,
         }
     )
     logger.close()
