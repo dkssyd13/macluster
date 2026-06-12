@@ -67,4 +67,13 @@ run_phase () {  # phase name
 }
 
 for p in "${PHASES[@]}"; do run_phase "$p"; done
-echo "[48GB] all requested phases finished. Metrics under runs/  (this Mac = rank0 = stage0)."
+
+echo "============================================================"
+echo "[48GB] all requested phases finished. This Mac = rank0 = stage0."
+echo "[48GB] rank0 metrics (comm/timing/peak_mem): runs/*-rank0/{metrics.jsonl,summary.json}"
+IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '<this-mac-ip>')"
+echo "[48GB] rank1's loss/perplexity live on the 24GB Mac. To collect them HERE for the"
+echo "       report, enable Remote Login on this Mac (System Settings > General > Sharing),"
+echo "       then on the 24GB Mac run:"
+echo "         RESULTS_DEST=$(whoami)@$IP:$(pwd)/runs/  ./scripts/run_mac_24gb.sh"
+echo "============================================================"

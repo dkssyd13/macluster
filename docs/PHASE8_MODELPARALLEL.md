@@ -83,6 +83,26 @@ This avoids `mx.vjp`'s list-of-arrays API and uses only `value_and_grad`/`grad`.
   data parallelism provably cannot. Memory math: split ~2/3 of params onto the
   48GB Mac, ~1/3 onto the 24GB Mac (each within its budget + 1F1B activation room).
 
+## Logged metrics (for the report)
+Each run writes `runs/<slug>-rank{r}/{config.json, metrics.jsonl, summary.json}`.
+Per-round records (DP and MP share field names so `plot.py`/sweeps work on both):
+- **convergence**: `train_loss` every round; `val_loss` + `perplexity` (text) /
+  `accuracy` (cifar) on eval rounds. On MP+grove these live on the LAST rank.
+- **communication**: `comm_bytes`, `comm_bytes_cum`, summary `total_comm_MB`
+  (DP = parameter all-reduce; MP = activation-forward + cotangent-back seam).
+- **time**: `compute_s`, `sync_s_sim`, `round_s_sim`, cumulative `sim_time_s`;
+  on grove the MEASURED `round_s_real` (+ `comm_s_real` for MP = seam transfer +
+  pipeline-bubble wait; `compute_s_real`/`sync_s_real` for DP).
+- **memory**: `peak_mem_mb` — MEASURED peak unified memory (`mx.get_peak_memory`)
+  per replica (DP) / per stage (MP). This is the hard evidence for the headline:
+  on the gpt3b MP run rank0~30GB / rank1~15GB, each within its node, while the
+  full model's ~44GB fp32 Adam state never fits one node for DP.
+- **throughput / partition**: `throughput_sps`, `samples`; MP summary adds
+  `n_stages`, `cut`, `stage_param_counts`, `model_param_count`.
+
+Both ranks log locally, so rank1's loss/perplexity start on the 24GB Mac;
+`scripts/run_mac_24gb.sh` copies `runs/` to the 48GB Mac (set `RESULTS_DEST`).
+
 ## Open questions
 - Cross-Wi-Fi/AWDL latency in the 1F1B seam: real jitter may bubble the pipeline
   more than Asteroid's wired-Jetson numbers; measure on the real 2-Mac run.

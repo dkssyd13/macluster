@@ -150,6 +150,7 @@ def run_training(cfg: TrainConfig, run_dir: str) -> dict:
     rng = np.random.default_rng(cfg.seed)
 
     algo.init_global(cluster.initial_params())
+    mx.reset_peak_memory()  # measure peak unified memory during training (per replica/rank)
 
     target = cfg.target_metric
     if target is None:
@@ -248,6 +249,7 @@ def run_training(cfg: TrainConfig, run_dir: str) -> dict:
             "link": link_name,
             "samples": samples,
             "throughput_sps": round(H * cluster.world_size * cfg.batch_size / max(compute_s, 1e-6), 1),
+            "peak_mem_mb": round(mx.get_peak_memory() / 1e6, 1),  # measured replica/rank footprint
             **real_timing,
             **algo.knobs(),
         }
@@ -273,6 +275,7 @@ def run_training(cfg: TrainConfig, run_dir: str) -> dict:
             "config": asdict(cfg),
             "final_train_loss": final.get("train_loss"),
             f"final_{task.metric}": final.get(task.metric),
+            "peak_mem_mb": round(mx.get_peak_memory() / 1e6, 1),
             "total_comm_bytes": int(total_bytes),
             "total_comm_MB": round(total_bytes / 1e6, 3),
             "sim_time_s": round(sim_time, 3),
@@ -376,6 +379,7 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
     cluster = build_pipeline_cluster(cfg, gpt_cfg, cuts, task)
     link = build_link(cfg)
     rng = np.random.default_rng(cfg.seed)
+    mx.reset_peak_memory()  # measure this rank's peak unified memory during training
 
     is_grove = cfg.backend == "grove"
     # On grove the metric-bearing rank is the LAST one (it owns the loss + the
@@ -411,7 +415,10 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
             compute_s = time.perf_counter() - t0
             sync_s = 0.0  # communication overlaps compute; folded into the measured step
             link_name = cfg.link
-            real_timing = {"round_s_real": round(compute_s, 5)}
+            real_timing = {
+                "round_s_real": round(compute_s, 5),
+                "comm_s_real": round(getattr(cluster, "_comm_s", 0.0), 5),  # seam transfer + bubble
+            }
         else:
             t0 = time.perf_counter()
             loss, comm_bytes = cluster.step(cfg.n_micro)
@@ -448,6 +455,7 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
             "link": link_name,
             "samples": samples,
             "throughput_sps": round(cfg.n_micro * cfg.batch_size / max(compute_s, 1e-6), 1),
+            "peak_mem_mb": round(mx.get_peak_memory() / 1e6, 1),  # measured per-stage footprint
             **real_timing,
             **knobs,
         }
@@ -475,6 +483,7 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
             "cut": cuts,
             "stage_param_counts": part,
             "model_param_count": gpt_param_count(gpt_cfg),
+            "peak_mem_mb": round(mx.get_peak_memory() / 1e6, 1),
             "final_train_loss": final.get("train_loss"),
             f"final_{task.metric}": final.get(task.metric),
             "total_comm_bytes": int(total_bytes),

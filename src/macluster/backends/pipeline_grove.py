@@ -41,6 +41,8 @@ targets on the last stage.
 
 from __future__ import annotations
 
+import time
+
 import grove
 import mlx.core as mx
 import mlx.nn as nn
@@ -88,6 +90,18 @@ class PipelineCluster:
     def barrier(self) -> None:
         grove.barrier()
 
+    # --- timed seam transfers (measures transfer + pipeline-bubble wait) ------
+    def _send(self, x: mx.array, dst: int) -> None:
+        t = time.perf_counter()
+        grove.send(x, dst)
+        self._comm_s += time.perf_counter() - t
+
+    def _recv(self, shape, src: int) -> mx.array:
+        t = time.perf_counter()
+        out = grove.recv(shape, mx.float32, src)
+        self._comm_s += time.perf_counter() - t
+        return out
+
     # --- gradient accumulation across micro-batches --------------------------
     def _accum(self, g: dict) -> None:
         if self._grad_accum is None:
@@ -104,14 +118,14 @@ class PipelineCluster:
         if self.is_first:
             inp = X
         else:
-            inp = grove.recv((self.B, self.T, self.C), mx.float32, src=self.rank - 1)
+            inp = self._recv((self.B, self.T, self.C), src=self.rank - 1)
         self._inp[i] = inp
         if self.is_last:
             self._y[i] = y
             return  # last stage defers its forward into the backward's value_and_grad
         out = self.stage(inp)
         mx.eval(out)
-        grove.send(out, dst=self.rank + 1)
+        self._send(out, dst=self.rank + 1)
         self._seam_bytes += int(out.size) * 4  # fp32 hidden state, forward
 
     def _backward_micro(self, i: int) -> None:
@@ -130,11 +144,11 @@ class PipelineCluster:
             self._loss_sum += float(loss)
             self._accum(g)
             if not self.is_first:  # send dL/dh upstream (guarded for the W=1 single stage)
-                grove.send(cot, dst=self.rank - 1)
+                self._send(cot, dst=self.rank - 1)
                 self._seam_bytes += int(cot.size) * 4
             return
 
-        cot = grove.recv((self.B, self.T, self.C), mx.float32, src=self.rank + 1)
+        cot = self._recv((self.B, self.T, self.C), src=self.rank + 1)
         if self.is_first:
             def surrogate0(params):
                 self.stage.update(params)
@@ -153,7 +167,7 @@ class PipelineCluster:
             )
             mx.eval(g, cot_prev)
             self._accum(g)
-            grove.send(cot_prev, dst=self.rank - 1)
+            self._send(cot_prev, dst=self.rank - 1)
             self._seam_bytes += int(cot_prev.size) * 4
 
     # --- one optimizer step over n_micro micro-batches (1F1B) ----------------
@@ -167,6 +181,7 @@ class PipelineCluster:
         self._grad_accum = None
         self._loss_sum = 0.0
         self._seam_bytes = 0
+        self._comm_s = 0.0  # wall-clock in seam send/recv this step (transfer + bubble wait)
 
         warmup = max(0, min(self.world - 1 - self.rank, n_micro))
         steady = n_micro - warmup

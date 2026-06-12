@@ -63,4 +63,23 @@ join_phase () {  # phase name
 }
 
 for p in "${PHASES[@]}"; do join_phase "$p"; done
-echo "[24GB] all requested phases finished. Metrics under runs/  (this Mac = rank1 = stage1)."
+
+echo "============================================================"
+echo "[24GB] all requested phases finished. This Mac = rank1 = stage1."
+echo "[24GB] rank1 metrics (train_loss + val_loss/perplexity + peak_mem): runs/*-rank1/"
+# Collect results onto the 48GB Mac so everything for the report lives there.
+DEST="${RESULTS_DEST:-}"
+if [[ -n "$DEST" ]]; then
+  echo "[24GB] copying runs/ -> $DEST (rsync)..."
+  if rsync -az runs/ "$DEST"; then
+    echo "[24GB] results copied to the 48GB Mac."
+  else
+    echo "[24GB] rsync FAILED. Copy runs/ to the 48GB Mac by hand (AirDrop the runs/ folder, or"
+    echo "       enable Remote Login on the 48GB Mac and rerun with a correct RESULTS_DEST)."
+  fi
+else
+  echo "[24GB] NOTE: rank1's loss/perplexity are ONLY on this (borrowed) Mac. Before returning it,"
+  echo "       copy runs/ to the 48GB Mac: set RESULTS_DEST (the 48GB script prints the exact value)"
+  echo "       and rerun, or just AirDrop the runs/ folder."
+fi
+echo "============================================================"
