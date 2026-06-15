@@ -96,7 +96,9 @@ Per-round records (DP and MP share field names so `plot.py`/sweeps work on both)
 - **memory**: `peak_mem_mb` — MEASURED peak unified memory (`mx.get_peak_memory`)
   per replica (DP) / per stage (MP). This is the hard evidence for the headline:
   on the gpt3b MP run rank0~30GB / rank1~15GB, each within its node, while the
-  full model's ~44GB fp32 Adam state never fits one node for DP.
+  full model's ~44GB fp32 Adam state cannot fit the 24GB node a DP replica would
+  need (DP replicates the FULL model on EVERY node, so the cluster's smallest Mac
+  is the binding constraint).
 - **throughput / partition**: `throughput_sps`, `samples`; MP summary adds
   `n_stages`, `cut`, `stage_param_counts`, `model_param_count`.
 
@@ -133,11 +135,17 @@ Both ranks log locally, so rank1's loss/perplexity start on the 24GB Mac;
   `plot.py` / sweeps work unchanged).
 - `scripts/grove_entry.py` + `configs/grove/pipeline.env`: the 2-Mac launch path.
 
-**Still open (NOT in this slice):** the apples-to-apples comparison wants the DP
-runs to use the *untied-head* model too (Design decisions §1); the DP path still
-trains the tied `gpt124m`. Add an untied full-GPT `model_fn` before running the
-mid-model DP-vs-MP head-to-head. Also: v2 auto-partition by profiling, and >2
-stages (the grove schedule is written generally but only validated for 2).
+**Shipped since:** the apples-to-apples DP side is now wired. `gpt2_untied` (a
+monolithic GPT with the SAME separate head as `GPTStage`, `GPT(cfg,
+untie_head=True)`) is registered in both `data/text.py:model_fns` (DP path) and
+`GPT_CONFIGS` (MP path), so `--model gpt2_untied` trains the IDENTICAL
+architecture data-parallel OR pipeline (verified param-for-param in
+`tests/test_dp_vs_mp.py`). The turnkey scripts run it as the `mp_mid` + `dp_mid`
+phases (`configs/grove/{mp,dp}_mid.env`) on a matched 3200-sample budget, so
+wall-clock / comm bytes / peak memory / convergence compare like-for-like.
+
+**Still open (NOT in this slice):** v2 auto-partition by profiling, and >2 stages
+(the grove schedule is written generally but only validated for 2).
 
 ## How to run
 ```bash
@@ -155,11 +163,14 @@ uv run macluster train --task wikitext --parallelism pipeline --model gpt2 \
 ./scripts/run_mac_48gb.sh    # on the 48GB Mac (rank0 = stage0)
 ./scripts/run_mac_24gb.sh    # on the 24GB Mac (rank1 = stage1)
 ```
-The two scripts run three phases in order — `smoke` (synthetic connectivity),
-`xl` (gpt_xl ~1.6B, fits both), `3b` (gpt3b ~2.78B, the headline) — each a full
-2-Mac run, so even if `3b` OOMs you still have the `smoke`+`xl` results. Run a
-subset with the same arg on both Macs, e.g. `./scripts/run_mac_48gb.sh xl`. The
-memory-aware cut `[48,24]` puts ~2/3 of the blocks (stage0) on the 48GB Mac;
-`gpt3b`'s fp32 Adam state (~44GB) exceeds a single 48GB node, so only the split
-can train it — the point data parallelism cannot make. Configs live in
-`configs/grove/pipeline_{smoke,xl,3b}.env` (same bytes sourced on both Macs).
+The two scripts run five phases in order — `smoke` (synthetic connectivity),
+`mp_mid`+`dp_mid` (gpt2_untied ~163M, the apples-to-apples DP-vs-MP comparison on
+a matched 3200-sample budget), `xl` (gpt_xl ~1.6B, fits both), `3b` (gpt3b ~2.78B,
+the headline) — each a full 2-Mac run, so even if a late phase OOMs you keep the
+earlier results. Run a subset with the same arg on both Macs, e.g.
+`./scripts/run_mac_48gb.sh mp_mid dp_mid`. The memory-aware cut `[48,24]` puts
+~2/3 of the blocks (stage0) on the 48GB Mac; `gpt3b`'s fp32 Adam state (~44GB) far
+exceeds the 24GB node every DP replica would need (and leaves no headroom on the
+48GB node either), so only the split can train it — the point data parallelism
+cannot make. Configs live in `configs/grove/{pipeline_smoke,mp_mid,dp_mid,
+pipeline_xl,pipeline_3b}.env` (same bytes sourced on both Macs).

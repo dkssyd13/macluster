@@ -7,13 +7,18 @@
 #   1) On the 48GB Mac:  ./scripts/run_mac_48gb.sh
 #   2) On the 24GB Mac:  ./scripts/run_mac_24gb.sh      (start within ~2 min)
 #
-# Runs three phases in order, each a full 2-Mac run; later phases reuse nothing
-# from earlier ones, so even if gpt3b OOMs you still have the smoke + gpt_xl runs:
-#   smoke  synthetic connectivity + seam check (instant)
-#   xl     gpt_xl  (~1.6B) on wikitext  -- fits both Macs comfortably
-#   3b     gpt3b   (~2.78B) on wikitext -- the headline (only MP can train it)
+# Runs five phases in order, each a full 2-Mac run; later phases reuse nothing
+# from earlier ones, so even if a late phase OOMs you keep the earlier results:
+#   smoke   synthetic connectivity + seam check (instant)
+#   mp_mid  gpt2_untied (~163M) MODEL-parallel on wikitext  \ apples-to-apples
+#   dp_mid  gpt2_untied (~163M) DATA-parallel  on wikitext  / DP-vs-MP comparison
+#   xl      gpt_xl  (~1.6B) on wikitext  -- fits both Macs comfortably
+#   3b      gpt3b   (~2.78B) on wikitext -- the headline (only MP can train it)
+# mp_mid + dp_mid train the IDENTICAL untied-head model on the SAME data budget
+# (3200 samples) -> like-for-like wall-clock/comm/peak-mem/convergence; 3b shows
+# the model only MP can fit at all.
 #
-# Run a subset by naming phases:  ./scripts/run_mac_48gb.sh xl 3b
+# Run a subset by naming phases:  ./scripts/run_mac_48gb.sh mp_mid dp_mid
 # (run the SAME phase args on BOTH Macs.)
 # =============================================================================
 set -uo pipefail
@@ -22,14 +27,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-PHASES=("$@"); [[ ${#PHASES[@]} -eq 0 ]] && PHASES=(smoke xl 3b)
+PHASES=("$@"); [[ ${#PHASES[@]} -eq 0 ]] && PHASES=(smoke mp_mid dp_mid xl 3b)
 
 config_for () {  # phase name -> config path
   case "$1" in
-    smoke) echo configs/grove/pipeline_smoke.env ;;
-    xl)    echo configs/grove/pipeline_xl.env ;;
-    3b)    echo configs/grove/pipeline_3b.env ;;
-    *)     echo "" ;;
+    smoke)  echo configs/grove/pipeline_smoke.env ;;
+    mp_mid) echo configs/grove/mp_mid.env ;;
+    dp_mid) echo configs/grove/dp_mid.env ;;
+    xl)     echo configs/grove/pipeline_xl.env ;;
+    3b)     echo configs/grove/pipeline_3b.env ;;
+    *)      echo "" ;;
   esac
 }
 

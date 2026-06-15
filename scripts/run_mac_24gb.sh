@@ -6,10 +6,12 @@
 #   1) On the 48GB Mac:  ./scripts/run_mac_48gb.sh
 #   2) On the 24GB Mac:  ./scripts/run_mac_24gb.sh   <-- this script
 #
-# Same three phases, in the same order, as the 48GB script. Each phase retries the
-# join for a while so it doesn't matter who reaches the phase first.
+# Same five phases (smoke mp_mid dp_mid xl 3b), in the same order, as the 48GB
+# script. Each phase retries the join for a while so it doesn't matter who reaches
+# the phase first. mp_mid + dp_mid are the apples-to-apples DP-vs-MP comparison
+# (same model, same data budget); 3b is the MP-only headline.
 #
-# Run a subset by naming phases:  ./scripts/run_mac_24gb.sh xl 3b
+# Run a subset by naming phases:  ./scripts/run_mac_24gb.sh mp_mid dp_mid
 # (run the SAME phase args as the 48GB Mac.)
 # =============================================================================
 set -uo pipefail
@@ -18,14 +20,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-PHASES=("$@"); [[ ${#PHASES[@]} -eq 0 ]] && PHASES=(smoke xl 3b)
+PHASES=("$@"); [[ ${#PHASES[@]} -eq 0 ]] && PHASES=(smoke mp_mid dp_mid xl 3b)
 
 config_for () {
   case "$1" in
-    smoke) echo configs/grove/pipeline_smoke.env ;;
-    xl)    echo configs/grove/pipeline_xl.env ;;
-    3b)    echo configs/grove/pipeline_3b.env ;;
-    *)     echo "" ;;
+    smoke)  echo configs/grove/pipeline_smoke.env ;;
+    mp_mid) echo configs/grove/mp_mid.env ;;
+    dp_mid) echo configs/grove/dp_mid.env ;;
+    xl)     echo configs/grove/pipeline_xl.env ;;
+    3b)     echo configs/grove/pipeline_3b.env ;;
+    *)      echo "" ;;
   esac
 }
 

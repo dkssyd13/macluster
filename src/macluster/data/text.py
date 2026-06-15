@@ -23,7 +23,7 @@ Contract (see ``task.py``):
   loss_fn(model, X, y) -> mean next-token cross-entropy (scalar mlx array)
   eval_fn(model, eval_batches) -> {'val_loss', 'perplexity'}
   metric='val_loss', metric_goal='min'
-  model_fns = {'chargpt': gpt_small(vocab), 'gpt2': gpt124m(vocab)}
+  model_fns = {'chargpt': gpt_small, 'gpt2': gpt124m (tied), 'gpt2_untied': gpt124m_untied}
   X, y are int32 mlx arrays of shape (batch_size, seq_len); y is X shifted by one.
 """
 
@@ -36,7 +36,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
-from ..models.gpt import gpt124m, gpt_small
+from ..models.gpt import gpt124m, gpt124m_untied, gpt_small
 from ..task import Task
 
 _SHAKESPEARE_URL = (
@@ -242,10 +242,14 @@ def make_text_task(
     ]
     eval_batches = _eval_batches(eval_ids, batch_size, seq_len, eval_max_batches)
 
-    # Close over the built vocab so both candidate models match the tokenizer.
+    # Close over the built vocab so the candidate models match the tokenizer.
+    # ``gpt2_untied`` is the apples-to-apples DP-vs-MP model: a monolithic GPT
+    # with the SAME untied head the pipeline split uses, so a data-parallel run
+    # and a model-parallel run of ``--model gpt2_untied`` train identical nets.
     model_fns = {
         "chargpt": lambda: gpt_small(vocab_size),
         "gpt2": lambda: gpt124m(vocab_size),
+        "gpt2_untied": lambda: gpt124m_untied(vocab_size),
     }
 
     meta.update(

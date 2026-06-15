@@ -93,17 +93,24 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(self, cfg: GPTConfig):
+    def __init__(self, cfg: GPTConfig, untie_head: bool = False):
         super().__init__()
         self.cfg = cfg
+        self.untie_head = untie_head
         self.wte = nn.Embedding(cfg.vocab_size, cfg.n_embd)   # token embeddings
         self.wpe = nn.Embedding(cfg.block_size, cfg.n_embd)   # learned positions
         self.blocks = [Block(cfg) for _ in range(cfg.n_layer)]
         self.ln_f = nn.LayerNorm(cfg.n_embd)
-        # Weight-tied LM head (Press & Wolf, 2017; as in GPT-2): the output
-        # projection reuses the token-embedding matrix, so there is no separate
-        # head parameter. This is what gives the canonical ~124M count at vocab
-        # 50257 (an untied head would add vocab*n_embd ~= 38.6M extra params).
+        # LM head. Default: weight-tied (Press & Wolf, 2017; as in GPT-2) — the
+        # output projection reuses the token-embedding matrix, so there is no
+        # separate head parameter, giving the canonical ~124M count at vocab
+        # 50257. With untie_head=True we add a SEPARATE nn.Linear head
+        # (+vocab*n_embd ~= 38.6M params) that matches the pipeline GPTStage's
+        # untied head, so the data-parallel model trains the SAME architecture as
+        # the model-parallel split — required for an apples-to-apples DP-vs-MP
+        # comparison (see docs/PHASE8_MODELPARALLEL.md design decisions).
+        if untie_head:
+            self.head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
     def __call__(self, idx: mx.array) -> mx.array:
         """idx: int (B, T) token ids -> logits (B, T, vocab_size)."""
@@ -115,6 +122,8 @@ class GPT(nn.Module):
         for blk in self.blocks:
             x = blk(x)
         x = self.ln_f(x)
+        if self.untie_head:
+            return self.head(x)                  # untied LM head: separate projection
         return self.wte.as_linear(x)         # tied LM head: logits over vocab
 
 
@@ -153,6 +162,15 @@ def gpt124m(vocab_size: int) -> GPT:
     return GPT(gpt124m_cfg(vocab_size))
 
 
+def gpt124m_untied(vocab_size: int) -> GPT:
+    """GPT-2-small geometry with an UNTIED LM head (~163M params at vocab 50257).
+    The shared model for the DP-vs-MP head-to-head: architecturally identical to
+    the pipeline split's GPTStage union (embeds + blocks + ln_f + separate head),
+    so data- and model-parallel train the SAME network. ~38.6M params more than
+    the tied gpt124m because of the separate head."""
+    return GPT(gpt124m_cfg(vocab_size), untie_head=True)
+
+
 def gpt_xl(vocab_size: int) -> GPT:
     """~1.5B-param GPT (pipeline target; usually too big for a single node)."""
     return GPT(gpt_xl_cfg(vocab_size))
@@ -163,13 +181,17 @@ def gpt3b(vocab_size: int) -> GPT:
     return GPT(gpt3b_cfg(vocab_size))
 
 
-# Model name -> (vocab_size -> GPTConfig). The first two names match the
-# ``model_fns`` keys in data/text.py (so DP and MP share a name); ``gpt_xl`` /
-# ``gpt3b`` are pipeline-only (no monolithic model_fn — they intentionally don't
-# fit a single node). The pipeline executor looks a ``--model`` up here.
+# Model name -> (vocab_size -> GPTConfig). ``chargpt`` / ``gpt2`` / ``gpt2_untied``
+# also exist as ``model_fns`` keys in data/text.py, so the SAME ``--model`` runs
+# data-parallel (monolithic) or pipeline (split). ``gpt2_untied`` is the
+# apples-to-apples DP-vs-MP model (the pipeline GPTStage is always untied, so its
+# geometry is just gpt124m_cfg). ``gpt_xl`` / ``gpt3b`` are pipeline-only (no
+# monolithic model_fn — they intentionally don't fit a single node). The pipeline
+# executor looks a ``--model`` up here.
 GPT_CONFIGS: dict[str, Callable[[int], GPTConfig]] = {
     "chargpt": gpt_small_cfg,
     "gpt2": gpt124m_cfg,
+    "gpt2_untied": gpt124m_cfg,
     "gpt_xl": gpt_xl_cfg,
     "gpt3b": gpt3b_cfg,
 }
