@@ -75,6 +75,17 @@ def main() -> None:
         except Exception:
             pass
 
+    # Clean teardown: coordinator (rank0) hosts the store, so it must exit LAST or
+    # the worker's last op resets (same fix as grove_entry). Asymmetric handshake.
+    try:
+        store = grove._comm._group._store
+        if r == 0:
+            store.wait([f"selftest_done/{i}" for i in range(1, w)], timeout=60.0)
+        else:
+            store.set(f"selftest_done/{r}", b"1")
+    except Exception:
+        pass
+
     print(f"[selftest] rank {r}: ALL PASSED — self-init {transport} data plane works.", flush=True)
 
 
