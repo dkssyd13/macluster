@@ -145,6 +145,9 @@ def run_training(cfg: TrainConfig, run_dir: str) -> dict:
         raise KeyError(f"unknown parallelism {cfg.parallelism!r} (data | pipeline)")
     task = build_task(cfg)
     cluster = build_cluster(cfg, task)
+    if cfg.backend == "grove":  # abort loudly if the Macs built different corpora
+        from .backends.grove_backend import assert_data_consensus
+        assert_data_consensus(task.meta)
     algo = build_algorithm(cfg)
     link = build_link(cfg)
     rng = np.random.default_rng(cfg.seed)
@@ -377,6 +380,9 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
         raise ValueError(f"--seq-len {cfg.seq_len} exceeds {cfg.model} block_size {gpt_cfg.block_size}")
     cuts = resolve_cuts(cfg, gpt_cfg)
     cluster = build_pipeline_cluster(cfg, gpt_cfg, cuts, task)
+    if cfg.backend == "grove":  # abort loudly if the Macs built different corpora
+        from .backends.grove_backend import assert_data_consensus
+        assert_data_consensus(task.meta)
     link = build_link(cfg)
     rng = np.random.default_rng(cfg.seed)
     mx.reset_peak_memory()  # measure this rank's peak unified memory during training

@@ -18,6 +18,8 @@ join``) BEFORE this class is constructed; we never call ``grove.init()`` here.
 
 from __future__ import annotations
 
+import hashlib
+
 import grove
 import mlx.core as mx
 import mlx.nn as nn
@@ -25,6 +27,35 @@ from mlx.utils import tree_flatten, tree_unflatten
 
 from ..algorithms.base import tree_clone
 from ..task import Task
+
+
+def assert_data_consensus(meta: dict) -> None:
+    """Abort if the ranks built DIFFERENT data across the Macs.
+
+    ``grove_entry._assert_config_consensus`` hashes the *config*
+    (``task='wikitext'``, ``seed``, ...), which is identical on both Macs no
+    matter which corpus actually loaded — so it CANNOT catch the silent case
+    where one Mac's wikitext download fails and falls back to
+    ``tinyshakespeare-bpe`` (same vocab=50257, so nothing crashes). Here we hash
+    the *resolved* data fingerprint (corpus/source/tokenizer + token count +
+    vocab) and ``all_sum`` it across ranks; a mismatch means the stages would
+    train/score against different token streams and the logged
+    loss/perplexity would be silently meaningless. Cheap collective, run once
+    before the round loop. No-op at ``world_size == 1``."""
+    if int(grove.world_size) <= 1:
+        return
+    fp = "|".join(
+        str(meta.get(k)) for k in ("corpus", "bpe_source", "tokenizer", "n_tokens", "vocab_size")
+    )
+    local = int(hashlib.sha256(fp.encode()).hexdigest(), 16) % (2 ** 23)  # exact in fp32
+    total = float(grove.all_sum(mx.array([float(local)]))[0])
+    if abs(total - local * int(grove.world_size)) > 0.5:
+        raise SystemExit(
+            f"[grove] rank {grove.rank}: DATA disagrees across Macs "
+            f"(fingerprint={fp!r}). Most likely one Mac fell back to "
+            f"tinyshakespeare because the wikitext download failed. Pre-seed "
+            f"data/cache/text/wikitext2_1.txt on EVERY Mac (same bytes) and retry."
+        )
 
 
 class GroveCluster:
