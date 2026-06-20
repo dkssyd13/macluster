@@ -70,8 +70,15 @@
 학습/평가하게 되어 **loss/perplexity가 의미 없는 값이 됨** (반납 후에야 발견). 그래서 캐시를
 직접 복사한다.
 
-- [ ] 48GB 맥의 `data/cache/text/` 폴더를 빌린 맥의 `<repo>/data/cache/text/`로 **AirDrop** 복사.
-  (`_download_text`는 이미 있는 파일은 건너뛰므로, 복사해두면 빌린 맥이 다시 받지 않고 그대로 씀.)
+- [ ] **방법 A (권장, 가장 안전) — AirDrop:** 48GB 맥의 `data/cache/text/` 폴더를 빌린 맥의
+  `<repo>/data/cache/text/`로 복사. (`_download_text`는 이미 있는 파일은 건너뛰므로, 복사해두면
+  빌린 맥이 다시 받지 않고 그대로 씀 → 두 맥 바이트 동일 보장.)
+- [ ] **방법 B (AirDrop 불편할 때) — 빌린 맥이 직접 다운로드 + 검증:**
+  ```bash
+  ./scripts/fetch_data.sh        # data/cache/text/ 로 wikitext 받고, 진짜 wikitext인지 검증
+  ```
+  단일 미러(raw.githubusercontent.com)에서 받으며, **fallback(tinyshakespeare)으로 떨어지면
+  큰 경고 + exit 1로 멈춤**(조용한 오염 방지). 막히면 방법 A로.
 - [ ] **두 맥 모두에서 같은 값이 뜨는지 직접 확인** (다르면 절대 본 실험 시작 금지):
   ```bash
   uv run python -c "from macluster.data.text import make_text_task as m; t=m(1,variant='wikitext',batch_size=8,seq_len=128,data_dir='data/cache',seed=0); print(t.meta['bpe_source'], t.meta['n_tokens'])"
