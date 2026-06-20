@@ -102,10 +102,25 @@ def _assert_config_consensus(cfg: TrainConfig) -> None:
 
 
 def main() -> None:
-    # grove start/join already initialised the world; only init for the
-    # standalone `python scripts/grove_entry.py` smoke path (stays world_size=1).
-    if grove._comm is None and grove.world_size <= 1:
-        grove.init()
+    # Three launch paths:
+    #  1) via `grove start`/`join`: the world is already up (grove._comm set) and
+    #     the script was distributed -- nothing to init here.
+    #  2) via scripts/p2.sh (GROVE_CLUSTER + GROVE_N>1 set): SELF-rendezvous with
+    #     grove.init(transport=...). This bypasses the grove cli, whose tcp path
+    #     never delivers the script to the joiner ("script not received"); each Mac
+    #     runs its own local copy instead.
+    #  3) standalone `python scripts/grove_entry.py`: world_size=1 smoke.
+    if grove._comm is None:
+        cluster = os.environ.get("GROVE_CLUSTER")
+        ws = int(os.environ.get("GROVE_N", "1"))
+        if cluster and ws > 1:
+            grove.init(
+                cluster=cluster,
+                world_size=ws,
+                transport=os.environ.get("GROVE_TRANSPORT", "tcp"),
+            )
+        elif grove.world_size <= 1:
+            grove.init()
 
     cfg = _cfg_from_env()
     mx.random.seed(cfg.seed)  # rank-identical model init (no broadcast needed)
@@ -116,6 +131,25 @@ def main() -> None:
     print(f"[grove_entry] rank {grove.rank}/{grove.world_size} -> {run_dir}")
     summary = run_training(cfg, run_dir)
     print(f"[grove_entry] rank {grove.rank} done: {json.dumps(summary, default=str)}")
+
+    # Clean teardown for the self-init (scripts/p2.sh / run2.sh) path: the
+    # coordinator (rank 0) hosts the TCPStore + CoordinatorServer *inside its own
+    # process*, so if it exits first the workers' in-flight store ops reset
+    # ("Control connection lost" -> barrier ConnectionResetError). The grove
+    # start/join cli manages this lifecycle; here we do it ourselves with an
+    # asymmetric done-handshake so the store owner always exits LAST.
+    if grove.world_size > 1 and grove._comm is not None:
+        try:
+            store = grove._comm._group._store
+            if grove.rank == 0:
+                store.wait(
+                    [f"macluster_done/{r}" for r in range(1, int(grove.world_size))],
+                    timeout=300.0,
+                )
+            else:
+                store.set(f"macluster_done/{grove.rank}", b"1")
+        except Exception as e:  # never let teardown bookkeeping fail a finished run
+            print(f"[grove_entry] rank {grove.rank} teardown handshake skipped: {e}")
 
 
 if __name__ == "__main__":
