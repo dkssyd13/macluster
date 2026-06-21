@@ -57,13 +57,17 @@ copy_join_results () {
   [[ "$ROLE" == join ]] || return 0
   local dest="${RESULTS_DEST:-}"
   [[ -n "$dest" ]] || return 0
-  echo "[join] copying runs/ -> $dest (rsync)..."
-  if rsync -az runs/ "$dest"; then
-    echo "[join] results copied. Verify on the 48GB Mac: ls runs/*-rank1/metrics.jsonl"
-  else
-    echo "[join] WARN: rsync failed; will retry at the end."
-    return 1
-  fi
+  local attempt
+  for attempt in 1 2 3; do
+    echo "[join] copying runs/ -> $dest (rsync attempt $attempt/3)..."
+    if rsync -az --partial --timeout=60 runs/ "$dest"; then
+      echo "[join] results copied. Verify on the 48GB Mac: ls runs/*-rank1/metrics.jsonl"
+      return 0
+    fi
+    sleep 3
+  done
+  echo "[join] WARN: rsync failed after 3 attempts; will retry at the end."
+  return 1
 }
 
 run_phase () {
