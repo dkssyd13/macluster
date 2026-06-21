@@ -468,8 +468,16 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
 
         if do_eval:
             if is_grove:
+                # Cap the eval seam transfer well under grove's 120s socket
+                # timeout: 16 batches of a big model's hidden states over slow
+                # Wi-Fi can exceed it (xl ~105MB, gpt3b ~168MB per eval). ~50MB
+                # budget -- mp_mid keeps all 16 batches; only the big xl/3b models
+                # trim (their convergence curve is not a headline result). Both
+                # ranks compute the same cap, so the eval set stays in lockstep.
+                bpb = cfg.batch_size * cfg.seq_len * gpt_cfg.n_embd * 4
+                eval_set = task.eval_batches[: max(1, int(50_000_000 / max(bpb, 1)))]
                 cluster.barrier()
-                metrics = cluster.eval_loss(task.eval_batches)  # None except the last rank
+                metrics = cluster.eval_loss(eval_set)  # None except the last rank
                 cluster.barrier()
                 if metrics:
                     rec.update(metrics)

@@ -53,21 +53,26 @@ fi
 run_phase () {
   local phase="$1" cfg; cfg="$(config_for "$phase")"
   if [[ -z "$cfg" || ! -f "$cfg" ]]; then echo "[$ROLE] unknown/missing phase '$phase' -- skipping"; return; fi
-  set -a; source "$cfg"; set +a
-  export GROVE_TRANSPORT="${GROVE_TRANSPORT:-tcp}"
-  export GROVE_N="${N:-2}"
-  export GROVE_CLUSTER="${CLUSTER:-macluster}"   # per-phase name (mac_smoke/mac_mp/...)
-  export MACLUSTER_RUNS_ROOT="${MACLUSTER_RUNS_ROOT:-runs}"
-  if [[ "$ROLE" == coord ]]; then export GROVE_IS_COORDINATOR=1; else unset GROVE_IS_COORDINATOR || true; fi
-  echo "============================================================"
-  echo "[$ROLE] PHASE '$phase'  model=${MACLUSTER_MODEL:-?} cluster=$GROVE_CLUSTER transport=$GROVE_TRANSPORT"
-  echo "[$ROLE] (coord starts first; joiner discovers within grove's 120s window)"
-  echo "============================================================"
-  if uv run python scripts/grove_entry.py; then
-    echo "[$ROLE] PHASE '$phase' DONE"
-  else
-    echo "[$ROLE] PHASE '$phase' FAILED (rc=$?) -- continuing to next phase."
-  fi
+  # Run each phase in a SUBSHELL so its MACLUSTER_*/GROVE_* env CANNOT leak into
+  # the next phase. Without this, smoke's MACLUSTER_SYNTHETIC=1 / MACLUSTER_CUT=2
+  # persist into mp_mid/dp_mid/xl/3b and silently corrupt them (synthetic random
+  # data, vocab=256 instead of 50257, hand cut instead of the memory-aware cut).
+  (
+    set -a; source "$cfg"; set +a
+    export GROVE_TRANSPORT="${GROVE_TRANSPORT:-tcp}"
+    export GROVE_N="${N:-2}"
+    export GROVE_CLUSTER="${CLUSTER:-macluster}"   # per-phase name (mac_smoke/mac_mp/...)
+    export MACLUSTER_RUNS_ROOT="${MACLUSTER_RUNS_ROOT:-runs}"
+    [[ "$ROLE" == coord ]] && export GROVE_IS_COORDINATOR=1
+    echo "============================================================"
+    echo "[$ROLE] PHASE '$phase'  model=${MACLUSTER_MODEL:-?}  synthetic=${MACLUSTER_SYNTHETIC:-0}  cut=${MACLUSTER_CUT:-auto}  cluster=$GROVE_CLUSTER"
+    echo "[$ROLE] (coord starts first; joiner discovers within grove's 120s window)"
+    echo "============================================================"
+    uv run python scripts/grove_entry.py
+  )
+  local rc=$?
+  if [[ $rc -eq 0 ]]; then echo "[$ROLE] PHASE '$phase' DONE"
+  else echo "[$ROLE] PHASE '$phase' FAILED (rc=$rc) -- continuing to next phase."; fi
   sleep 3
 }
 
