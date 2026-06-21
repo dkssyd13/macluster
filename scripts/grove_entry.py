@@ -176,6 +176,23 @@ def _init_static_tcp(peers_spec: str, rank: int, world_size: int, timeout: float
     )
 
 
+def _patch_grove_socket_timeout(timeout: float) -> None:
+    """Raise grove's point-to-point socket timeout for slow Wi-Fi pipeline steps."""
+    from grove.transport.socket_conn import SocketConnection
+
+    if getattr(SocketConnection, "_macluster_timeout_patch", False):
+        return
+    orig_init = SocketConnection.__init__
+
+    def _init_with_timeout(self, sock):
+        orig_init(self, sock)
+        self._sock.settimeout(timeout)
+
+    SocketConnection.__init__ = _init_with_timeout
+    SocketConnection._macluster_timeout_patch = True
+    print(f"[grove_entry] socket timeout set to {timeout:.1f}s", flush=True)
+
+
 def main() -> None:
     # Three launch paths:
     #  1) via `grove start`/`join`: the world is already up (grove._comm set) and
@@ -190,6 +207,7 @@ def main() -> None:
         ws = int(os.environ.get("GROVE_N", "1"))
         peers = os.environ.get("GROVE_PEERS", "")
         timeout = float(os.environ.get("GROVE_TIMEOUT", "120.0"))
+        _patch_grove_socket_timeout(float(os.environ.get("GROVE_SOCKET_TIMEOUT", str(timeout))))
         if peers and ws > 1:
             _init_static_tcp(
                 peers,
