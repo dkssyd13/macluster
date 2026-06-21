@@ -111,7 +111,6 @@ def _init_static_tcp(peers_spec: str, rank: int, world_size: int, timeout: float
     from grove._init import _init_packer
     from grove._types import DEFAULT_BASE_PORT, TransportType
     from grove.comm import Communicator
-    from grove.coordinator import CoordinatorServer, WorkerClient
     from grove.group import Group
     from grove.store.tcp_store import TCPStore
 
@@ -156,18 +155,13 @@ def _init_static_tcp(peers_spec: str, rank: int, world_size: int, timeout: float
     store.wait = _long_wait  # type: ignore[method-assign]
     group = Group(rank, world_size, store, TransportType.TCP)
 
-    coord_port = DEFAULT_BASE_PORT - 198
-    if rank == 0:
-        grove._coordinator = CoordinatorServer(
-            coord_host,
-            coord_port,
-            world_size,
-            {r: peers[r] for r in range(world_size)},
-        )
-
-    worker_client = WorkerClient(coord_host, coord_port, rank)
-    grove._worker_client = worker_client
-    grove._comm = Communicator(group, worker_client)
+    # Static peer mode is for a fixed 2-Mac experiment, not elastic/fault-tolerant
+    # membership. Avoid grove's CoordinatorServer heartbeat path: long MLX calls
+    # on the slower rank can starve its Python heartbeat thread for >60s, causing
+    # false "Node missed heartbeat" reform while the data plane is still valid.
+    grove._coordinator = None
+    grove._worker_client = None
+    grove._comm = Communicator(group, None)
     _init_packer()
     print(
         f"[grove_entry] static TCP init rank {rank}/{world_size} "
