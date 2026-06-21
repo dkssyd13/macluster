@@ -10,8 +10,18 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-COORD_IP="${MACLUSTER_COORD_IP:-192.168.1.130}"
+detect_ip () {
+  ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true
+}
+
+COORD_IP="${MACLUSTER_COORD_IP:-$(detect_ip)}"
 JOIN_IP="${MACLUSTER_JOIN_IP:-192.168.1.97}"
+
+if [[ -z "$COORD_IP" ]]; then
+  echo "[run2_coord] could not detect this Mac's Wi-Fi IP. Reconnect Wi-Fi and retry,"
+  echo "             or pass MACLUSTER_COORD_IP=<this-mac-ip>."
+  exit 1
+fi
 
 export GROVE_PEERS="${GROVE_PEERS:-$COORD_IP,$JOIN_IP}"
 export GROVE_TIMEOUT="${GROVE_TIMEOUT:-600}"

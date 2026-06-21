@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import time
 from dataclasses import asdict
 
@@ -124,6 +125,26 @@ def _init_static_tcp(peers_spec: str, rank: int, world_size: int, timeout: float
         raise SystemExit(f"[grove_entry] GROVE_RANK={rank} out of range for world_size={world_size}")
 
     coord_host = peers[0]
+    if rank == 0:
+        try:
+            local_ips = {addr[4][0] for addr in socket.getaddrinfo(socket.gethostname(), None)}
+        except socket.gaierror:
+            local_ips = set()
+        local_ips.update({"127.0.0.1", "::1"})
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))
+            local_ips.add(probe.getsockname()[0])
+            probe.close()
+        except OSError:
+            pass
+        if coord_host not in local_ips:
+            raise SystemExit(
+                f"[grove_entry] GROVE_PEERS starts with {coord_host}, but this rank0 Mac "
+                f"does not currently own that IP (local={sorted(local_ips)}). "
+                "Reconnect Wi-Fi or rerun ./scripts/run2_coord.sh so it detects "
+                "the current IP."
+            )
     grove.rank = rank
     grove.world_size = world_size
     store = TCPStore(
