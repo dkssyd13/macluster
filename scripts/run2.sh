@@ -105,7 +105,9 @@ run_phase () {
   local rc=${PIPESTATUS[0]}
   if [[ $rc -eq 0 ]]; then echo "[$ROLE] PHASE '$phase' DONE"
   else echo "[$ROLE] PHASE '$phase' FAILED (rc=$rc) -- continuing to next phase."; fi
-  if [[ "$ROLE" == join ]]; then copy_join_results || true; fi
+  if [[ "$ROLE" == join && "${RUN2_COPY_EACH_PHASE:-0}" == "1" ]]; then
+    copy_join_results || true
+  fi
   sleep 3
 }
 

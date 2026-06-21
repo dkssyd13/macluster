@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import asdict
 
 import grove
@@ -133,6 +134,26 @@ def _init_static_tcp(peers_spec: str, rank: int, world_size: int, timeout: float
         port=DEFAULT_BASE_PORT - 199,
         timeout=timeout,
     )
+    # grove's TCPStore.wait() uses a hard-coded 30s server-side wait. In static
+    # peer mode the joiner can be delayed by shell startup or result collection,
+    # so use the requested GROVE_TIMEOUT for the transport address rendezvous.
+    def _long_wait(keys: list[str], wait_timeout: float | None = None) -> None:
+        deadline = time.monotonic() + (wait_timeout or timeout)
+        missing = list(keys)
+        while time.monotonic() < deadline:
+            still_missing = []
+            for key in missing:
+                try:
+                    store.get_nowait(key)
+                except KeyError:
+                    still_missing.append(key)
+            if not still_missing:
+                return
+            missing = still_missing
+            time.sleep(0.05)
+        raise TimeoutError(f"Wait timed out for keys: {missing}")
+
+    store.wait = _long_wait  # type: ignore[method-assign]
     group = Group(rank, world_size, store, TransportType.TCP)
 
     coord_port = DEFAULT_BASE_PORT - 198
