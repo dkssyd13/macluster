@@ -171,7 +171,9 @@ def run_training(cfg: TrainConfig, run_dir: str) -> dict:
     # grid so every run gets ~the same number of eval points; otherwise we run a
     # fixed number of rounds and evaluate every `eval_every` rounds.
     budget = cfg.max_steps
-    eval_step_interval = max(1, budget // 20) if budget is not None else None
+    eval_step_interval = None
+    if cfg.eval_every > 0:
+        eval_step_interval = cfg.eval_every if budget is not None else None
     next_eval_at = eval_step_interval
 
     rnd = 0
@@ -232,12 +234,12 @@ def run_training(cfg: TrainConfig, run_dir: str) -> dict:
 
         if budget is not None:
             is_last = steps_done >= budget
-            do_eval = is_last or steps_done >= next_eval_at
-            if steps_done >= next_eval_at:
+            do_eval = eval_step_interval is not None and (is_last or steps_done >= next_eval_at)
+            if eval_step_interval is not None and steps_done >= next_eval_at:
                 next_eval_at += eval_step_interval
         else:
             is_last = rnd == cfg.rounds - 1
-            do_eval = is_last or rnd % cfg.eval_every == 0
+            do_eval = cfg.eval_every > 0 and (is_last or rnd % cfg.eval_every == 0)
 
         rec = {
             "round": rnd,
@@ -407,7 +409,9 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
     samples = 0
 
     budget = cfg.max_steps  # interpreted as a number of optimizer steps for pipeline
-    eval_step_interval = max(1, budget // 20) if budget is not None else None
+    eval_step_interval = None
+    if cfg.eval_every > 0:
+        eval_step_interval = cfg.eval_every if budget is not None else None
     next_eval_at = eval_step_interval
 
     rnd = 0
@@ -441,12 +445,12 @@ def run_pipeline_training(cfg: TrainConfig, run_dir: str) -> dict:
 
         if budget is not None:
             is_last = steps_done >= budget
-            do_eval = is_last or steps_done >= next_eval_at
-            if steps_done >= next_eval_at:
+            do_eval = eval_step_interval is not None and (is_last or steps_done >= next_eval_at)
+            if eval_step_interval is not None and steps_done >= next_eval_at:
                 next_eval_at += eval_step_interval
         else:
             is_last = rnd == cfg.rounds - 1
-            do_eval = is_last or rnd % cfg.eval_every == 0
+            do_eval = cfg.eval_every > 0 and (is_last or rnd % cfg.eval_every == 0)
 
         rec = {
             "round": rnd,
