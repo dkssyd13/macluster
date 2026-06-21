@@ -81,11 +81,19 @@ run_phase () {
     export GROVE_N="${N:-2}"
     export GROVE_CLUSTER="${CLUSTER:-macluster}"   # per-phase name (mac_smoke/mac_mp/...)
     export GROVE_TIMEOUT="${GROVE_TIMEOUT:-180.0}"
+    if [[ -n "${GROVE_PEERS:-}" ]]; then
+      [[ "$ROLE" == coord ]] && export GROVE_RANK=0 || export GROVE_RANK=1
+    fi
     export MACLUSTER_RUNS_ROOT="${MACLUSTER_RUNS_ROOT:-runs}"
     [[ "$ROLE" == coord ]] && export GROVE_IS_COORDINATOR=1
     echo "============================================================"
     echo "[$ROLE] PHASE '$phase'  model=${MACLUSTER_MODEL:-?}  synthetic=${MACLUSTER_SYNTHETIC:-0}  cut=${MACLUSTER_CUT:-auto}  cluster=$GROVE_CLUSTER"
-    echo "[$ROLE] (coord starts first; joiner discovers within grove's ${GROVE_TIMEOUT}s window)"
+    if [[ -n "${GROVE_PEERS:-}" ]]; then
+      echo "[$ROLE] static peers: GROVE_PEERS=$GROVE_PEERS rank=$GROVE_RANK"
+      echo "[$ROLE] (coord starts first; joiner should start within grove's TCPStore window)"
+    else
+      echo "[$ROLE] (coord starts first; joiner discovers within grove's ${GROVE_TIMEOUT}s window)"
+    fi
     echo "[$ROLE] phase log: $log"
     echo "============================================================"
     uv run python -u scripts/grove_entry.py

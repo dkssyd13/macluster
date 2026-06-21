@@ -101,6 +101,60 @@ def _assert_config_consensus(cfg: TrainConfig) -> None:
         )
 
 
+def _init_static_tcp(peers_spec: str, rank: int, world_size: int, timeout: float) -> None:
+    """Initialize grove over TCP with explicit rank->host mapping.
+
+    This bypasses grove's Bonjour/mDNS discovery path, which can be blocked by
+    campus Wi-Fi or macOS Local Network privacy even when direct LAN TCP works.
+    """
+    from grove._init import _init_packer
+    from grove._types import DEFAULT_BASE_PORT, TransportType
+    from grove.comm import Communicator
+    from grove.coordinator import CoordinatorServer, WorkerClient
+    from grove.group import Group
+    from grove.store.tcp_store import TCPStore
+
+    peers = [p.strip() for p in peers_spec.split(",") if p.strip()]
+    if len(peers) != world_size:
+        raise SystemExit(
+            f"[grove_entry] GROVE_PEERS has {len(peers)} host(s), "
+            f"but GROVE_N/world_size is {world_size}: {peers!r}"
+        )
+    if not 0 <= rank < world_size:
+        raise SystemExit(f"[grove_entry] GROVE_RANK={rank} out of range for world_size={world_size}")
+
+    coord_host = peers[0]
+    grove.rank = rank
+    grove.world_size = world_size
+    store = TCPStore(
+        rank=rank,
+        world_size=world_size,
+        host=coord_host,
+        port=DEFAULT_BASE_PORT - 199,
+        timeout=timeout,
+    )
+    group = Group(rank, world_size, store, TransportType.TCP)
+
+    coord_port = DEFAULT_BASE_PORT - 198
+    if rank == 0:
+        grove._coordinator = CoordinatorServer(
+            coord_host,
+            coord_port,
+            world_size,
+            {r: peers[r] for r in range(world_size)},
+        )
+
+    worker_client = WorkerClient(coord_host, coord_port, rank)
+    grove._worker_client = worker_client
+    grove._comm = Communicator(group, worker_client)
+    _init_packer()
+    print(
+        f"[grove_entry] static TCP init rank {rank}/{world_size} "
+        f"peers={peers} coord={coord_host}",
+        flush=True,
+    )
+
+
 def main() -> None:
     # Three launch paths:
     #  1) via `grove start`/`join`: the world is already up (grove._comm set) and
@@ -113,12 +167,21 @@ def main() -> None:
     if grove._comm is None:
         cluster = os.environ.get("GROVE_CLUSTER")
         ws = int(os.environ.get("GROVE_N", "1"))
-        if cluster and ws > 1:
+        peers = os.environ.get("GROVE_PEERS", "")
+        timeout = float(os.environ.get("GROVE_TIMEOUT", "120.0"))
+        if peers and ws > 1:
+            _init_static_tcp(
+                peers,
+                rank=int(os.environ.get("GROVE_RANK", "0")),
+                world_size=ws,
+                timeout=timeout,
+            )
+        elif cluster and ws > 1:
             grove.init(
                 cluster=cluster,
                 world_size=ws,
                 transport=os.environ.get("GROVE_TRANSPORT", "tcp"),
-                timeout=float(os.environ.get("GROVE_TIMEOUT", "120.0")),
+                timeout=timeout,
             )
         elif grove.world_size <= 1:
             grove.init()
