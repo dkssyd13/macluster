@@ -18,7 +18,14 @@ COORD_REPO="${MACLUSTER_COORD_REPO:-/Users/vladkim/Personal/CAU/26-1/ACN/project
 
 export GROVE_PEERS="${GROVE_PEERS:-$COORD_IP,$JOIN_IP}"
 export GROVE_TIMEOUT="${GROVE_TIMEOUT:-600}"
-export RESULTS_DEST="${RESULTS_DEST:-$COORD_USER@$COORD_IP:$COORD_REPO/runs/}"
+if [[ -n "${RESULTS_DEST:-}" ]]; then
+  export RUN2_SKIP_RSYNC="${RUN2_SKIP_RSYNC:-0}"
+else
+  export RUN2_SKIP_RSYNC="${RUN2_SKIP_RSYNC:-1}"
+fi
+if [[ "$RUN2_SKIP_RSYNC" != "1" ]]; then
+  export RESULTS_DEST="${RESULTS_DEST:-$COORD_USER@$COORD_IP:$COORD_REPO/runs/}"
+fi
 
 PHASES=("$@")
 if [[ ${#PHASES[@]} -eq 0 ]]; then
@@ -26,6 +33,10 @@ if [[ ${#PHASES[@]} -eq 0 ]]; then
 fi
 
 echo "[run2_join] GROVE_PEERS=$GROVE_PEERS"
-echo "[run2_join] RESULTS_DEST=$RESULTS_DEST"
+if [[ "$RUN2_SKIP_RSYNC" == "1" ]]; then
+  echo "[run2_join] rsync disabled; copy runs/ from this Mac after the run"
+else
+  echo "[run2_join] RESULTS_DEST=$RESULTS_DEST"
+fi
 echo "[run2_join] phases: ${PHASES[*]}"
 exec ./scripts/run2.sh join "${PHASES[@]}"

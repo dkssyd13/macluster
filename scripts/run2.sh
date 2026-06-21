@@ -55,6 +55,7 @@ fi
 
 copy_join_results () {
   [[ "$ROLE" == join ]] || return 0
+  [[ "${RUN2_SKIP_RSYNC:-0}" == "1" ]] && return 0
   local dest="${RESULTS_DEST:-}"
   [[ -n "$dest" ]] || return 0
   local attempt
@@ -117,11 +118,16 @@ echo "============================================================"
 if [[ "$ROLE" == coord ]]; then
   IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '<this-mac-ip>')"
   echo "[coord] all phases finished. rank0 metrics: runs/*-rank0/{metrics.jsonl,summary.json}"
-  echo "[coord] collect rank1 (MP loss/ppl) from the 24GB Mac. Enable Remote Login here, then on the 24GB Mac:"
-  echo "          RESULTS_DEST=$(whoami)@$IP:$(pwd)/runs/  ./scripts/run2.sh join"
+  echo "[coord] rank1's MP loss/perplexity live on the 24GB Mac."
+  echo "[coord] If rsync is disabled, AirDrop/copy the 24GB Mac's runs/ folder here."
+  echo "[coord] To use rsync instead, enable Remote Login here, then on the 24GB Mac:"
+  echo "          RUN2_SKIP_RSYNC=0 RESULTS_DEST=$(whoami)@$IP:$(pwd)/runs/  ./scripts/run2.sh join"
 else
   DEST="${RESULTS_DEST:-}"
-  if [[ -z "$DEST" ]]; then
+  if [[ "${RUN2_SKIP_RSYNC:-0}" == "1" ]]; then
+    echo "[join] rsync disabled (RUN2_SKIP_RSYNC=1)."
+    echo "[join] Keep this Mac until rank1 results are copied; AirDrop/copy the runs/ folder to rank0."
+  elif [[ -z "$DEST" ]]; then
     echo "############################################################"
     echo "[join] !!! RESULTS NOT COLLECTED !!! rank1 holds the ONLY copy of the MP"
     echo "       loss/perplexity. Do NOT return this Mac. Set RESULTS_DEST (the coord"
