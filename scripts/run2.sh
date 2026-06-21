@@ -20,6 +20,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROLE="${1:-}"; shift || true
 case "$ROLE" in coord|join) ;; *) echo "usage: ./scripts/run2.sh {coord|join} [phases...]"; exit 2 ;; esac
 PHASES=("$@"); [[ ${#PHASES[@]} -eq 0 ]] && PHASES=(smoke mp_mid dp_mid xl 3b)
+LOG_ROOT="${RUN2_LOG_ROOT:-runs/logs}"
+mkdir -p "$LOG_ROOT"
 
 config_for () {
   case "$1" in
@@ -33,6 +35,7 @@ config_for () {
 }
 
 echo "[$ROLE] repo: $(pwd)"
+echo "[$ROLE] phases: ${PHASES[*]}"
 echo "[$ROLE] syncing deps (uv sync)..."
 uv sync -q || { echo "[$ROLE] uv sync failed -- is uv installed?"; exit 1; }
 
@@ -50,29 +53,47 @@ sys.exit(0 if src == "wikitext-2-raw" else 1)
 PY
 fi
 
+copy_join_results () {
+  [[ "$ROLE" == join ]] || return 0
+  local dest="${RESULTS_DEST:-}"
+  [[ -n "$dest" ]] || return 0
+  echo "[join] copying runs/ -> $dest (rsync)..."
+  if rsync -az runs/ "$dest"; then
+    echo "[join] results copied. Verify on the 48GB Mac: ls runs/*-rank1/metrics.jsonl"
+  else
+    echo "[join] WARN: rsync failed; will retry at the end."
+    return 1
+  fi
+}
+
 run_phase () {
   local phase="$1" cfg; cfg="$(config_for "$phase")"
   if [[ -z "$cfg" || ! -f "$cfg" ]]; then echo "[$ROLE] unknown/missing phase '$phase' -- skipping"; return; fi
+  local log="$LOG_ROOT/run2-${ROLE}-${phase}-$(date +%Y%m%d-%H%M%S).log"
   # Run each phase in a SUBSHELL so its MACLUSTER_*/GROVE_* env CANNOT leak into
   # the next phase. Without this, smoke's MACLUSTER_SYNTHETIC=1 / MACLUSTER_CUT=2
   # persist into mp_mid/dp_mid/xl/3b and silently corrupt them (synthetic random
   # data, vocab=256 instead of 50257, hand cut instead of the memory-aware cut).
   (
+    export PYTHONUNBUFFERED=1
     set -a; source "$cfg"; set +a
     export GROVE_TRANSPORT="${GROVE_TRANSPORT:-tcp}"
     export GROVE_N="${N:-2}"
     export GROVE_CLUSTER="${CLUSTER:-macluster}"   # per-phase name (mac_smoke/mac_mp/...)
+    export GROVE_TIMEOUT="${GROVE_TIMEOUT:-180.0}"
     export MACLUSTER_RUNS_ROOT="${MACLUSTER_RUNS_ROOT:-runs}"
     [[ "$ROLE" == coord ]] && export GROVE_IS_COORDINATOR=1
     echo "============================================================"
     echo "[$ROLE] PHASE '$phase'  model=${MACLUSTER_MODEL:-?}  synthetic=${MACLUSTER_SYNTHETIC:-0}  cut=${MACLUSTER_CUT:-auto}  cluster=$GROVE_CLUSTER"
-    echo "[$ROLE] (coord starts first; joiner discovers within grove's 120s window)"
+    echo "[$ROLE] (coord starts first; joiner discovers within grove's ${GROVE_TIMEOUT}s window)"
+    echo "[$ROLE] phase log: $log"
     echo "============================================================"
-    uv run python scripts/grove_entry.py
-  )
-  local rc=$?
+    uv run python -u scripts/grove_entry.py
+  ) 2>&1 | tee "$log"
+  local rc=${PIPESTATUS[0]}
   if [[ $rc -eq 0 ]]; then echo "[$ROLE] PHASE '$phase' DONE"
   else echo "[$ROLE] PHASE '$phase' FAILED (rc=$rc) -- continuing to next phase."; fi
+  if [[ "$ROLE" == join ]]; then copy_join_results || true; fi
   sleep 3
 }
 
@@ -94,10 +115,7 @@ else
     echo "############################################################"
     exit 1
   fi
-  echo "[join] copying runs/ -> $DEST (rsync)..."
-  if rsync -az runs/ "$DEST"; then
-    echo "[join] results copied. Verify on the 48GB Mac: ls runs/*-rank1/metrics.jsonl"
-  else
+  if ! copy_join_results; then
     echo "############################################################"
     echo "[join] !!! rsync FAILED -- RESULTS NOT COLLECTED !!! Do NOT return this Mac."
     echo "       Fix RESULTS_DEST (Remote Login on the 48GB Mac) and rerun, or AirDrop runs/."

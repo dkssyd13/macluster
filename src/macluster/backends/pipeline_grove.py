@@ -88,17 +88,35 @@ class PipelineCluster:
         return self.world
 
     def barrier(self) -> None:
-        grove.barrier()
+        try:
+            grove.barrier()
+        except (ConnectionError, OSError, TimeoutError) as e:
+            raise RuntimeError(
+                f"rank {self.rank}: lost a peer during pipeline barrier; "
+                "check the peer's runs/logs/ phase log for the original error"
+            ) from e
 
     # --- timed seam transfers (measures transfer + pipeline-bubble wait) ------
     def _send(self, x: mx.array, dst: int) -> None:
         t = time.perf_counter()
-        grove.send(x, dst)
+        try:
+            grove.send(x, dst)
+        except (ConnectionError, OSError, TimeoutError) as e:
+            raise RuntimeError(
+                f"rank {self.rank}: pipeline send to rank {dst} failed; "
+                "the peer likely crashed or exited this phase"
+            ) from e
         self._comm_s += time.perf_counter() - t
 
     def _recv(self, shape, src: int) -> mx.array:
         t = time.perf_counter()
-        out = grove.recv(shape, mx.float32, src)
+        try:
+            out = grove.recv(shape, mx.float32, src)
+        except (ConnectionError, OSError, TimeoutError) as e:
+            raise RuntimeError(
+                f"rank {self.rank}: pipeline recv from rank {src} failed; "
+                "the peer likely crashed before sending the matching tensor"
+            ) from e
         self._comm_s += time.perf_counter() - t
         return out
 

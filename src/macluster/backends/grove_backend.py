@@ -86,21 +86,38 @@ class GroveCluster:
     def world_size(self) -> int:
         return self._world_size
 
+    def _assert_world_intact(self, op: str) -> None:
+        live = int(grove.world_size)
+        if live != self._world_size:
+            raise RuntimeError(
+                f"grove membership changed during {op}: started with "
+                f"world_size={self._world_size}, live world_size={live}. "
+                "A peer rank left or crashed; this 2-Mac experiment cannot "
+                "continue as a valid data-parallel run. Check the peer's "
+                "runs/logs/ phase log for the original error."
+            )
+
     def _broadcast_initial_params(self) -> None:
         if self._world_size <= 1:
             return  # W=1: identical by construction; keep the path a no-op
         flat = tree_flatten(self.model.trainable_parameters())
-        avg = {n: grove.all_sum(v) / self._world_size for n, v in flat}
+        avg = {}
+        for n, v in flat:
+            avg[n] = grove.all_sum(v) / self._world_size
+            self._assert_world_intact("initial parameter broadcast")
         self.model.update(tree_unflatten(list(avg.items())))
         mx.eval(self.model.parameters())
 
     # --- collective helpers: algorithms aggregate via the cluster handle ------
     def all_sum(self, x: mx.array) -> mx.array:
         """Element-wise SUM across ranks (identity at world_size==1)."""
-        return grove.all_sum(x)
+        out = grove.all_sum(x)
+        self._assert_world_intact("all_sum")
+        return out
 
     def barrier(self) -> None:
         grove.barrier()
+        self._assert_world_intact("barrier")
 
     # --- mirror SimCluster's per-round surface for a single local model -------
     def load_global(self, params: dict) -> None:

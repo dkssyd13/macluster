@@ -18,6 +18,9 @@ class RunLogger:
         self.run_dir = run_dir
         os.makedirs(run_dir, exist_ok=True)
         self.config = config
+        summary_path = os.path.join(run_dir, "summary.json")
+        if os.path.exists(summary_path):
+            os.remove(summary_path)
         with open(os.path.join(run_dir, "config.json"), "w") as f:
             json.dump(config, f, indent=2, default=str)
         self._fh = open(os.path.join(run_dir, "metrics.jsonl"), "w")

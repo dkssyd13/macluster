@@ -118,6 +118,7 @@ def main() -> None:
                 cluster=cluster,
                 world_size=ws,
                 transport=os.environ.get("GROVE_TRANSPORT", "tcp"),
+                timeout=float(os.environ.get("GROVE_TIMEOUT", "120.0")),
             )
         elif grove.world_size <= 1:
             grove.init()
