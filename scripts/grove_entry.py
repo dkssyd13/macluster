@@ -157,8 +157,9 @@ def _init_static_tcp(peers_spec: str, rank: int, world_size: int, timeout: float
     # grove's TCPStore.wait() uses a hard-coded 30s server-side wait. In static
     # peer mode the joiner can be delayed by shell startup or result collection,
     # so use the requested GROVE_TIMEOUT for the transport address rendezvous.
-    def _long_wait(keys: list[str], wait_timeout: float | None = None) -> None:
-        deadline = time.monotonic() + (wait_timeout or timeout)
+    def _long_wait(keys: list[str], wait_timeout: float | None = None, **kwargs) -> None:
+        effective_timeout = wait_timeout if wait_timeout is not None else kwargs.get("timeout", timeout)
+        deadline = time.monotonic() + effective_timeout
         missing = list(keys)
         while time.monotonic() < deadline:
             still_missing = []
