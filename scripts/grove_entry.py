@@ -251,12 +251,11 @@ def main() -> None:
     summary = run_training(cfg, run_dir)
     print(f"[grove_entry] rank {grove.rank} done: {json.dumps(summary, default=str)}")
 
-    # Clean teardown for the self-init (scripts/p2.sh / run2.sh) path: the
-    # coordinator (rank 0) hosts the TCPStore + CoordinatorServer *inside its own
-    # process*, so if it exits first the workers' in-flight store ops reset
-    # ("Control connection lost" -> barrier ConnectionResetError). The grove
-    # start/join cli manages this lifecycle; here we do it ourselves with an
-    # asymmetric done-handshake so the store owner always exits LAST.
+    # Clean teardown for the self-init (scripts/p2.sh / run2.sh) path. Rank 0
+    # hosts the TCPStore inside its process, so it must not exit before workers
+    # publish their done markers. Workers also wait for rank 0's release marker
+    # before their shell advances to the next phase; otherwise a faster rank can
+    # start the next phase while rank 0 is still tearing down the previous store.
     if grove.world_size > 1 and grove._comm is not None:
         try:
             store = grove._comm._group._store
@@ -265,8 +264,11 @@ def main() -> None:
                     [f"macluster_done/{r}" for r in range(1, int(grove.world_size))],
                     timeout=300.0,
                 )
+                for r in range(1, int(grove.world_size)):
+                    store.set(f"macluster_release/{r}", b"1")
             else:
                 store.set(f"macluster_done/{grove.rank}", b"1")
+                store.wait([f"macluster_release/{grove.rank}"], timeout=300.0)
         except Exception as e:  # never let teardown bookkeeping fail a finished run
             print(f"[grove_entry] rank {grove.rank} teardown handshake skipped: {e}")
 
